@@ -100,7 +100,7 @@ If you need to use the system's native TLS implementation instead (for example, 
 
 ```toml
 [dependencies]
-couch_rs = { version = "0.12", default-features = false, features = ["derive", "native-tls"] }
+couch_rs = { version = "0.13", default-features = false, features = ["derive", "native-tls"] }
 ```
 
 Available TLS feature options (choose one):
