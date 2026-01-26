@@ -239,11 +239,11 @@ mod couch_rs_tests {
         last_name: String,
     }
     impl TypedCouchDocument for TestDocImplementing {
-        fn get_id(&self) -> Cow<str> {
+        fn get_id(&self) -> Cow<'_, str> {
             Cow::Borrowed(&self.my_id)
         }
 
-        fn get_rev(&self) -> Cow<str> {
+        fn get_rev(&self) -> Cow<'_, str> {
             Cow::Borrowed(&self.my_rev)
         }
 
