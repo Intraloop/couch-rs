@@ -168,9 +168,7 @@ mod macros {
 
     /// Gets milliseconds from timespec
     macro_rules! tspec_ms {
-        ($tspec:ident) => {{
-            $tspec.sec * 1000 + $tspec.nsec as i64 / 1000000
-        }};
+        ($tspec:ident) => {{ $tspec.sec * 1000 + $tspec.nsec as i64 / 1000000 }};
     }
 
     /// Gets current UNIX time in milliseconds
@@ -183,9 +181,7 @@ mod macros {
 
     /// Url encode path segments
     macro_rules! url_encode {
-        ($id:ident) => {{
-            url::form_urlencoded::byte_serialize($id.as_bytes()).collect::<String>()
-        }};
+        ($id:ident) => {{ url::form_urlencoded::byte_serialize($id.as_bytes()).collect::<String>() }};
     }
 }
 
@@ -217,7 +213,7 @@ pub use client::Client;
 #[cfg(test)]
 mod couch_rs_tests {
     use crate as couch_rs;
-    use couch_rs::{document::TypedCouchDocument, types::document::DocumentId, CouchDocument};
+    use couch_rs::{CouchDocument, document::TypedCouchDocument, types::document::DocumentId};
     use serde::{Deserialize, Serialize};
     use std::borrow::Cow;
 
@@ -574,7 +570,7 @@ mod couch_rs_tests {
                 view::{CouchFunc, CouchViews, ViewCollection},
             },
         };
-        use serde_json::{json, Value};
+        use serde_json::{Value, json};
         use tokio::sync::{
             mpsc,
             mpsc::{Receiver, Sender},
@@ -1116,13 +1112,14 @@ mod couch_rs_tests {
 
                this will fail to deserialize if ViewItem.key is a String. It needs to be a Value to cover for all json scenarios
             */
-            assert!(db
-                .create_view(
+            assert!(
+                db.create_view(
                     view_name,
                     CouchViews::new(view_name, CouchFunc::new(count_by_id, Some("_count"))),
                 )
                 .await
-                .is_ok());
+                .is_ok()
+            );
 
             assert!(db.query_raw(view_name, view_name, None).await.is_ok());
 

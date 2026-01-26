@@ -13,7 +13,7 @@ use crate::{
         view::ViewCollection,
     },
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::marker::PhantomData;
 use tokio::sync::mpsc::Sender;

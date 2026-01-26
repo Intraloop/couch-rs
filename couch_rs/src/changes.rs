@@ -4,7 +4,7 @@ use crate::{
     types::changes::{ChangeEvent, Event},
 };
 use futures_core::{Future, Stream};
-use futures_util::{ready, FutureExt, StreamExt, TryStreamExt};
+use futures_util::{FutureExt, StreamExt, TryStreamExt, ready};
 use reqwest::{Method, Response, StatusCode};
 use std::{
     collections::HashMap,
@@ -36,8 +36,8 @@ pub struct ChangesStream {
 
 enum ChangesStreamState {
     Idle,
-    Requesting(Pin<Box<dyn Future<Output=CouchResult<Response>> + Send + Sync + 'static>>),
-    Reading(Pin<Box<dyn Stream<Item=io::Result<String>> + Send + Sync + 'static>>),
+    Requesting(Pin<Box<dyn Future<Output = CouchResult<Response>> + Send + Sync + 'static>>),
+    Reading(Pin<Box<dyn Stream<Item = io::Result<String>> + Send + Sync + 'static>>),
 }
 
 impl ChangesStream {
@@ -186,7 +186,7 @@ impl Stream for ChangesStream {
 mod tests {
     use crate::client::Client;
     use futures_util::StreamExt;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use tokio::join;
 
     #[tokio::test]
