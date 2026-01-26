@@ -17,7 +17,7 @@ Include this dependency in the Cargo.toml file:
 
 ```toml
 [dependencies]
-couch_rs = "0.12"
+couch_rs = "0.13"
 ```
 
 ## Description
