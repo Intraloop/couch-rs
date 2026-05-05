@@ -100,6 +100,23 @@
 //! }
 //!```
 //!
+//! ## JWT Authentication
+//!
+//! The library supports JWT/Bearer token authentication for CouchDB instances configured with JWT auth:
+//!
+//! ```no_run
+//! use couch_rs::Client;
+//! use std::error::Error;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn Error>> {
+//!     let jwt_token = "your_jwt_token_here";
+//!     let client = Client::new_with_bearer_token("http://localhost:5984", jwt_token)?;
+//!     let db = client.db("my_database").await?;
+//!     Ok(())
+//! }
+//! ```
+//!
 //! See the `database` module for additional usage examples. Or have a look at the `examples` in the
 //! GitHub repositiory.
 //!
