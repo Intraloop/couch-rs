@@ -101,6 +101,51 @@ impl Client {
         )
     }
 
+    /// `new_with_bearer_token` creates a new Couch client with JWT/Bearer token authentication.
+    /// The URI has to be in this format: <http://hostname:5984>, for example: <http://192.168.64.5:5984>
+    /// The bearer token should be a valid JWT token that CouchDB will accept.
+    ///
+    /// # Panics
+    /// Panics when the AUTHORIZATION header can not be set on the request.
+    ///
+    /// # Errors
+    /// Returns a `CouchError` if the URI is invalid.
+    pub fn new_with_bearer_token(uri: &str, token: &str) -> CouchResult<Client> {
+        Client::new_with_bearer_token_and_timeout(uri, token, Some(DEFAULT_TIME_OUT))
+    }
+
+    /// `new_with_bearer_token_and_timeout` creates a new Couch client with JWT/Bearer token authentication and custom timeout.
+    /// The URI has to be in this format: <http://hostname:5984>, for example: <http://192.168.64.5:5984>
+    /// The bearer token should be a valid JWT token that CouchDB will accept.
+    /// Timeout is in seconds.
+    ///
+    /// # Panics
+    /// Panics when the AUTHORIZATION header can not be set on the request.
+    ///
+    /// # Errors
+    /// Returns a `CouchError` if the URI is invalid.
+    pub fn new_with_bearer_token_and_timeout(uri: &str, token: &str, timeout: Option<u64>) -> CouchResult<Client> {
+        let mut headers = HeaderMap::new();
+
+        let bearer_value = format!("Bearer {token}");
+        let auth_header = HeaderValue::from_str(&bearer_value).expect("can not set AUTHORIZATION header");
+        headers.insert(header::AUTHORIZATION, auth_header);
+
+        let mut client_builder = reqwest::Client::builder().default_headers(headers).gzip(true);
+        if let Some(t) = timeout {
+            client_builder = client_builder.timeout(Duration::new(t, 0));
+        }
+        let client = client_builder.build()?;
+
+        Ok(Client {
+            client,
+            uri: parse_server(uri)?,
+            _gzip: true,
+            _timeout: timeout,
+            db_prefix: String::new(),
+        })
+    }
+
     /// `new_with_timeout` creates a new Couch client. The URI has to be in this format: <http://hostname:5984>,
     /// The timeout is applied from when the request starts connecting until the response body has finished.
     /// Timeout is in seconds.
