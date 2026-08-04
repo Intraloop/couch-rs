@@ -10,6 +10,7 @@ use crate::{
         find::{FindQuery, FindResult},
         index::{DatabaseIndexList, DeleteIndexResponse, IndexFields, IndexType},
         query::{QueriesCollection, QueriesParams, QueryParams},
+        revision::DocumentRevisions,
         view::ViewCollection,
     },
 };
@@ -224,6 +225,106 @@ impl Database {
         document.set_id(&id);
         document.set_rev(&rev);
         Ok(document)
+    }
+
+    /// Gets the revision information for a document.
+    ///
+    /// Usage:
+    /// ```no_run
+    /// use couch_rs::error::CouchResult;
+    ///
+    /// const TEST_DB: &str = "test_db";
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> CouchResult<()> {
+    ///     let client = couch_rs::Client::new_local_test()?;
+    ///     let db = client.db(TEST_DB).await?;
+    ///
+    ///     // Get revision information for a document
+    ///     let revisions = db.get_revisions("document_id").await?;
+    ///
+    ///     println!("Document ID: {}", revisions.id);
+    ///     println!("Current revision: {}", revisions.rev);
+    ///
+    ///     for rev_info in revisions.revs_info {
+    ///         println!("Revision: {} - Status: {:?}", rev_info.rev, rev_info.status);
+    ///     }
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// Returns a `CouchError` if the document does not exist or the request fails.
+    pub async fn get_revisions(&self, id: &str) -> CouchResult<DocumentRevisions> {
+        let mut params = std::collections::HashMap::new();
+        params.insert("revs_info".to_string(), "true".to_string());
+
+        let response = self
+            .client
+            .get(&self.create_document_path(id), Some(&params))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let revisions: DocumentRevisions = response.couch_json().await?;
+        Ok(revisions)
+    }
+
+    /// Gets a document at a specific revision.
+    ///
+    /// Usage:
+    /// ```no_run
+    /// use couch_rs::error::CouchResult;
+    /// use serde_json::Value;
+    ///
+    /// const TEST_DB: &str = "test_db";
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> CouchResult<()> {
+    ///     let client = couch_rs::Client::new_local_test()?;
+    ///     let db = client.db(TEST_DB).await?;
+    ///
+    ///     // Get a document at a specific revision
+    ///     let old_doc: Value = db.get_at_revision("document_id", "2-abc123").await?;
+    ///
+    ///     println!("Document at revision 2-abc123: {:?}", old_doc);
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    /// Returns a `CouchError` if the document or revision does not exist, cannot be deserialized, or the request fails.
+    pub async fn get_at_revision<T: TypedCouchDocument>(&self, id: &str, rev: &str) -> CouchResult<T> {
+        let mut params = std::collections::HashMap::new();
+        params.insert("rev".to_string(), rev.to_string());
+
+        let value: Value = self
+            .client
+            .get(&self.create_document_path(id), Some(&params))
+            .send()
+            .await?
+            .error_for_status()?
+            .couch_json()
+            .await?;
+
+        let id = get_mandatory_string_value(ID_FIELD, &value)?;
+        let rev = get_mandatory_string_value(REV_FIELD, &value)?;
+        let mut document: T = from_value(value)?;
+        document.set_id(&id);
+        document.set_rev(&rev);
+        Ok(document)
+    }
+
+    /// Gets a document at a specific revision as raw `Value`.
+    ///
+    /// Convenience wrapper around `get_at_revision::<Value>(id, rev)`.
+    ///
+    /// # Errors
+    /// Returns a `CouchError` if the document or revision does not exist or the request fails.
+    pub async fn get_at_revision_raw(&self, id: &str, rev: &str) -> CouchResult<Value> {
+        self.get_at_revision(id, rev).await
     }
 
     /// Gets documents in bulk with provided IDs list
@@ -1413,5 +1514,58 @@ mod tests {
         let response = build_json_response("not even json");
         let x = response.couch_json::<Baz>().await;
         assert_json_error(x, "error decoding response body");
+    }
+
+    #[tokio::test]
+    async fn test_revision_info_deserialization() {
+        use crate::types::revision::{DocumentRevisions, RevisionStatus};
+
+        let json_response = r#"{
+            "_id": "test_doc",
+            "_rev": "3-abc123",
+            "_revs_info": [
+                {"rev": "3-abc123", "status": "available"},
+                {"rev": "2-def456", "status": "available"},
+                {"rev": "1-ghi789", "status": "available"}
+            ]
+        }"#;
+
+        let response = build_json_response(json_response);
+        let result: CouchResult<DocumentRevisions> = response.couch_json().await;
+
+        assert!(result.is_ok());
+        let revisions = result.unwrap();
+
+        assert_eq!(revisions.id, "test_doc");
+        assert_eq!(revisions.rev, "3-abc123");
+        assert_eq!(revisions.revs_info.len(), 3);
+
+        assert_eq!(revisions.revs_info[0].rev, "3-abc123");
+        assert_eq!(revisions.revs_info[0].status, RevisionStatus::Available);
+
+        assert_eq!(revisions.revs_info[1].rev, "2-def456");
+        assert_eq!(revisions.revs_info[1].status, RevisionStatus::Available);
+
+        assert_eq!(revisions.revs_info[2].rev, "1-ghi789");
+        assert_eq!(revisions.revs_info[2].status, RevisionStatus::Available);
+    }
+
+    #[tokio::test]
+    async fn test_get_at_revision_deserialization() {
+        let json_response = r#"{
+            "_id": "test_doc",
+            "_rev": "2-def456",
+            "data": "old_value"
+        }"#;
+
+        let response = build_json_response(json_response);
+        let result: CouchResult<Value> = response.couch_json().await;
+
+        assert!(result.is_ok());
+        let doc = result.unwrap();
+
+        assert_eq!(doc["_id"], "test_doc");
+        assert_eq!(doc["_rev"], "2-def456");
+        assert_eq!(doc["data"], "old_value");
     }
 }
