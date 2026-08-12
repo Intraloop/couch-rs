@@ -1,37 +1,44 @@
-use crate::types::document::DocumentId;
 use serde::{Deserialize, Serialize};
 
-/// Represents the status of a document revision
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum RevisionStatus {
-    /// Revision is available
-    Available,
-    /// Revision has been deleted
-    Deleted,
-    /// Revision is missing
-    Missing,
+/// The `_revisions` field returned by `CouchDB` when a document is requested with
+/// `revs=true`. It encodes the revision-hash ancestry of a single revision as a
+/// starting generation plus the list of revision hashes (newest first).
+///
+/// Because the revision is addressed explicitly, this can be retrieved for any
+/// revision — including a deletion tombstone — even though a plain lookup of a
+/// deleted document returns `404 not_found`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Revisions {
+    /// Generation number of the newest revision in [`Revisions::ids`].
+    pub start: u64,
+    /// Revision hashes, newest first. The full revision string for `ids[i]` is
+    /// `{start - i}-{ids[i]}`.
+    pub ids: Vec<String>,
 }
 
-/// Information about a specific document revision
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct RevisionInfo {
-    /// The revision identifier
-    pub rev: String,
-    /// The status of this revision
-    pub status: RevisionStatus,
+impl Revisions {
+    /// Full revision strings (`{generation}-{hash}`), newest first. Index 0 is
+    /// the revision the history was requested for; index 1 is its parent, etc.
+    #[must_use]
+    pub fn revision_ids(&self) -> Vec<String> {
+        self.ids
+            .iter()
+            .enumerate()
+            .map(|(i, hash)| format!("{}-{}", self.start - i as u64, hash))
+            .collect()
+    }
+
+    /// The parent (previous) revision string, if one exists.
+    #[must_use]
+    pub fn parent(&self) -> Option<String> {
+        let hash = self.ids.get(1)?;
+        Some(format!("{}-{}", self.start - 1, hash))
+    }
 }
 
-/// Response structure for document revision information
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DocumentRevisions {
-    /// Document ID
-    #[serde(rename = "_id")]
-    pub id: DocumentId,
-    /// Current revision
-    #[serde(rename = "_rev")]
-    pub rev: String,
-    /// List of revision information
-    #[serde(rename = "_revs_info")]
-    pub revs_info: Vec<RevisionInfo>,
+/// Wrapper used to deserialize the `_revisions` field from a document response.
+#[derive(Deserialize)]
+pub(crate) struct RevisionsEnvelope {
+    #[serde(rename = "_revisions")]
+    pub revisions: Revisions,
 }

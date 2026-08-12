@@ -10,7 +10,7 @@ use crate::{
         find::{FindQuery, FindResult},
         index::{DatabaseIndexList, DeleteIndexResponse, IndexFields, IndexType},
         query::{QueriesCollection, QueriesParams, QueryParams},
-        revision::DocumentRevisions,
+        revision::{Revisions, RevisionsEnvelope},
         view::ViewCollection,
     },
 };
@@ -227,7 +227,16 @@ impl Database {
         Ok(document)
     }
 
-    /// Gets the revision information for a document.
+    /// Gets the revision ancestry (`_revisions`) of a document at a specific revision.
+    ///
+    /// This issues `GET /{db}/{id}?rev={rev}&revs=true`, returning the starting
+    /// generation and the list of revision hashes (newest first) for that revision.
+    ///
+    /// Unlike [`Database::get_revisions`], this works for **deleted** documents:
+    /// a plain lookup of a deleted document returns `404 not_found`, but addressing
+    /// a specific revision (such as the deletion tombstone) succeeds. This makes it
+    /// possible to walk back to the last live revision of a deleted document — for
+    /// example to recover fields that the tombstone no longer carries.
     ///
     /// Usage:
     /// ```no_run
@@ -240,14 +249,11 @@ impl Database {
     ///     let client = couch_rs::Client::new_local_test()?;
     ///     let db = client.db(TEST_DB).await?;
     ///
-    ///     // Get revision information for a document
-    ///     let revisions = db.get_revisions("document_id").await?;
-    ///
-    ///     println!("Document ID: {}", revisions.id);
-    ///     println!("Current revision: {}", revisions.rev);
-    ///
-    ///     for rev_info in revisions.revs_info {
-    ///         println!("Revision: {} - Status: {:?}", rev_info.rev, rev_info.status);
+    ///     // Walk back from a deletion tombstone to its parent revision.
+    ///     let history = db.get_revision_history("document_id", "3-deadbeef").await?;
+    ///     if let Some(parent) = history.parent() {
+    ///         let prev: serde_json::Value = db.get_at_revision("document_id", &parent).await?;
+    ///         println!("previous revision: {prev:?}");
     ///     }
     ///
     ///     Ok(())
@@ -255,20 +261,23 @@ impl Database {
     /// ```
     ///
     /// # Errors
-    /// Returns a `CouchError` if the document does not exist or the request fails.
-    pub async fn get_revisions(&self, id: &str) -> CouchResult<DocumentRevisions> {
+    /// Returns a `CouchError` if the revision does not exist, the response is missing
+    /// the `_revisions` field, or the request fails.
+    pub async fn get_revision_history(&self, id: &str, rev: &str) -> CouchResult<Revisions> {
         let mut params = std::collections::HashMap::new();
-        params.insert("revs_info".to_string(), "true".to_string());
+        params.insert("rev".to_string(), rev.to_string());
+        params.insert("revs".to_string(), "true".to_string());
 
-        let response = self
+        let envelope: RevisionsEnvelope = self
             .client
             .get(&self.create_document_path(id), Some(&params))
             .send()
             .await?
-            .error_for_status()?;
+            .error_for_status()?
+            .couch_json()
+            .await?;
 
-        let revisions: DocumentRevisions = response.couch_json().await?;
-        Ok(revisions)
+        Ok(envelope.revisions)
     }
 
     /// Gets a document at a specific revision.
@@ -1517,37 +1526,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_revision_info_deserialization() {
-        use crate::types::revision::{DocumentRevisions, RevisionStatus};
+    async fn test_revisions_deserialization() {
+        use crate::types::revision::RevisionsEnvelope;
 
         let json_response = r#"{
             "_id": "test_doc",
             "_rev": "3-abc123",
-            "_revs_info": [
-                {"rev": "3-abc123", "status": "available"},
-                {"rev": "2-def456", "status": "available"},
-                {"rev": "1-ghi789", "status": "available"}
-            ]
+            "_deleted": true,
+            "_revisions": {
+                "start": 3,
+                "ids": ["abc123", "def456", "ghi789"]
+            }
         }"#;
 
         let response = build_json_response(json_response);
-        let result: CouchResult<DocumentRevisions> = response.couch_json().await;
+        let result: CouchResult<RevisionsEnvelope> = response.couch_json().await;
 
         assert!(result.is_ok());
-        let revisions = result.unwrap();
+        let revisions = result.unwrap().revisions;
 
-        assert_eq!(revisions.id, "test_doc");
-        assert_eq!(revisions.rev, "3-abc123");
-        assert_eq!(revisions.revs_info.len(), 3);
-
-        assert_eq!(revisions.revs_info[0].rev, "3-abc123");
-        assert_eq!(revisions.revs_info[0].status, RevisionStatus::Available);
-
-        assert_eq!(revisions.revs_info[1].rev, "2-def456");
-        assert_eq!(revisions.revs_info[1].status, RevisionStatus::Available);
-
-        assert_eq!(revisions.revs_info[2].rev, "1-ghi789");
-        assert_eq!(revisions.revs_info[2].status, RevisionStatus::Available);
+        assert_eq!(revisions.start, 3);
+        assert_eq!(
+            revisions.revision_ids(),
+            vec!["3-abc123", "2-def456", "1-ghi789"]
+        );
+        assert_eq!(revisions.parent(), Some("2-def456".to_string()));
     }
 
     #[tokio::test]
