@@ -224,6 +224,7 @@ pub mod types;
 mod changes;
 
 pub use client::Client;
+pub use types::revision::Revisions;
 
 #[allow(unused_mut, unused_variables)]
 #[cfg(feature = "integration-tests")]
@@ -1309,6 +1310,243 @@ mod couch_rs_tests {
                 .await
                 .expect("unable to retrieve cluster setup status");
             assert_eq!(cluster_setup, ClusterSetup::ClusterEnabled);
+        }
+
+        #[tokio::test]
+        async fn should_get_revision_history() {
+            let (client, db, _doc) = setup("should_get_revision_history").await;
+
+            // Create a document and update it to build a revision chain.
+            let mut doc = json!({
+                "_id": "test_history",
+                "data": "version 1"
+            });
+            db.create(&mut doc).await.expect("should create document");
+            let rev1 = doc["_rev"].as_str().unwrap().to_string();
+
+            doc["data"] = json!("version 2");
+            db.save(&mut doc).await.expect("should update document");
+            let rev2 = doc["_rev"].as_str().unwrap().to_string();
+
+            doc["data"] = json!("version 3");
+            db.save(&mut doc).await.expect("should update document again");
+            let rev3 = doc["_rev"].as_str().unwrap().to_string();
+
+            // The history for the newest revision lists every revision, newest first.
+            let history = db
+                .get_revision_history("test_history", &rev3)
+                .await
+                .expect("should get revision history");
+
+            assert_eq!(history.revision_ids(), vec![rev3.clone(), rev2.clone(), rev1.clone()]);
+            assert_eq!(history.parent(), Some(rev2.clone()));
+
+            teardown(client, "should_get_revision_history").await;
+        }
+
+        #[tokio::test]
+        async fn should_get_revision_history_for_deleted_document() {
+            let (client, db, _doc) = setup("should_get_revision_history_deleted").await;
+
+            // Create then delete a document; the deletion tombstone no longer
+            // carries the document's fields.
+            let mut doc = json!({
+                "_id": "test_deleted_history",
+                "data": "the answer"
+            });
+            db.create(&mut doc).await.expect("should create document");
+            let rev1 = doc["_rev"].as_str().unwrap().to_string();
+
+            db.remove(&doc).await.expect("should delete document");
+            let deleted_rev = doc["_rev"].as_str().unwrap().to_string();
+
+            // A plain lookup of the deleted document fails...
+            assert!(
+                db.get_revision_history("test_deleted_history", "1-does-not-exist")
+                    .await
+                    .is_err()
+            );
+
+            // ...but addressing the tombstone revision succeeds and lets us walk
+            // back to the last live revision, recovering its fields.
+            let history = db
+                .get_revision_history("test_deleted_history", &deleted_rev)
+                .await
+                .expect("should get revision history for deleted document");
+
+            assert_eq!(history.parent(), Some(rev1.clone()));
+
+            let prev: Value = db
+                .get_at_revision("test_deleted_history", &rev1)
+                .await
+                .expect("should get last live revision");
+            assert_eq!(prev["data"], "the answer");
+
+            teardown(client, "should_get_revision_history_deleted").await;
+        }
+
+        #[tokio::test]
+        async fn should_get_document_at_specific_revision() {
+            let (client, db, _doc) = setup("should_get_document_at_revision").await;
+
+            // Create a document
+            let mut doc = json!({
+                "_id": "test_old_revision",
+                "data": "version 1",
+                "counter": 1
+            });
+            db.create(&mut doc).await.expect("should create document");
+            let rev1 = doc["_rev"].as_str().unwrap().to_string();
+
+            // Update the document
+            doc["data"] = json!("version 2");
+            doc["counter"] = json!(2);
+            db.save(&mut doc).await.expect("should update document");
+            let rev2 = doc["_rev"].as_str().unwrap().to_string();
+
+            // Update the document again
+            doc["data"] = json!("version 3");
+            doc["counter"] = json!(3);
+            db.save(&mut doc).await.expect("should update document again");
+
+            // Retrieve the document at the first revision
+            let old_doc: Value = db
+                .get_at_revision("test_old_revision", &rev1)
+                .await
+                .expect("should get document at old revision");
+
+            assert_eq!(old_doc["_id"], "test_old_revision");
+            assert_eq!(old_doc["_rev"], rev1);
+            assert_eq!(old_doc["data"], "version 1");
+            assert_eq!(old_doc["counter"], 1);
+
+            // Retrieve the document at the second revision
+            let mid_doc: Value = db
+                .get_at_revision("test_old_revision", &rev2)
+                .await
+                .expect("should get document at middle revision");
+
+            assert_eq!(mid_doc["_id"], "test_old_revision");
+            assert_eq!(mid_doc["_rev"], rev2);
+            assert_eq!(mid_doc["data"], "version 2");
+            assert_eq!(mid_doc["counter"], 2);
+
+            // Verify current document has the latest data
+            let current_doc: Value = db.get("test_old_revision").await.expect("should get current document");
+
+            assert_eq!(current_doc["data"], "version 3");
+            assert_eq!(current_doc["counter"], 3);
+
+            teardown(client, "should_get_document_at_revision").await;
+        }
+
+        #[tokio::test]
+        async fn should_get_document_at_revision_raw() {
+            let (client, db, _doc) = setup("should_get_at_revision_raw").await;
+
+            // Create and update a document
+            let mut doc = json!({
+                "_id": "test_raw_revision",
+                "value": "original"
+            });
+            db.create(&mut doc).await.expect("should create document");
+            let old_rev = doc["_rev"].as_str().unwrap().to_string();
+
+            doc["value"] = json!("updated");
+            db.save(&mut doc).await.expect("should update document");
+
+            // Use the raw convenience method
+            let old_doc = db
+                .get_at_revision_raw("test_raw_revision", &old_rev)
+                .await
+                .expect("should get raw document at old revision");
+
+            assert_eq!(old_doc["_id"], "test_raw_revision");
+            assert_eq!(old_doc["_rev"], old_rev);
+            assert_eq!(old_doc["value"], "original");
+
+            teardown(client, "should_get_at_revision_raw").await;
+        }
+
+        #[tokio::test]
+        async fn should_error_on_nonexistent_document_revision_history() {
+            let (client, db, _doc) = setup("should_error_nonexistent_history").await;
+
+            // Try to get the revision history for a document that doesn't exist
+            let result = db.get_revision_history("nonexistent_doc", "1-abc123").await;
+
+            assert!(
+                result.is_err(),
+                "should error when getting history for nonexistent document"
+            );
+
+            teardown(client, "should_error_nonexistent_history").await;
+        }
+
+        #[tokio::test]
+        async fn should_error_on_nonexistent_revision() {
+            let (client, db, _doc) = setup("should_error_nonexistent_rev").await;
+
+            // Create a document
+            let mut doc = json!({
+                "_id": "test_bad_revision",
+                "data": "test"
+            });
+            db.create(&mut doc).await.expect("should create document");
+
+            // Try to get the document at a revision that doesn't exist
+            let result: Result<Value, _> = db.get_at_revision("test_bad_revision", "999-invalid").await;
+
+            assert!(
+                result.is_err(),
+                "should error when getting document at invalid revision"
+            );
+
+            teardown(client, "should_error_nonexistent_rev").await;
+        }
+
+        #[tokio::test]
+        async fn should_get_typed_document_at_revision() {
+            use super::TestDoc;
+
+            let (client, db, _doc) = setup("should_get_typed_at_revision").await;
+
+            // Create a typed document
+            let mut test_doc = TestDoc {
+                _id: "typed_rev_test".to_string(),
+                _rev: String::new(),
+                first_name: "John".to_string(),
+                last_name: "Doe".to_string(),
+            };
+
+            let created = db.save(&mut test_doc).await.expect("should create typed document");
+            let old_rev = created.rev.clone();
+
+            // Update the document
+            test_doc.first_name = "Jane".to_string();
+            db.save(&mut test_doc).await.expect("should update typed document");
+
+            // Retrieve the old version as a typed document
+            let old_doc: TestDoc = db
+                .get_at_revision("typed_rev_test", &old_rev)
+                .await
+                .expect("should get typed document at old revision");
+
+            assert_eq!(old_doc._id, "typed_rev_test");
+            assert_eq!(old_doc._rev, old_rev);
+            assert_eq!(old_doc.first_name, "John");
+            assert_eq!(old_doc.last_name, "Doe");
+
+            // Verify current document has updated data
+            let current: TestDoc = db
+                .get("typed_rev_test")
+                .await
+                .expect("should get current typed document");
+
+            assert_eq!(current.first_name, "Jane");
+            assert_eq!(current.last_name, "Doe");
+
+            teardown(client, "should_get_typed_at_revision").await;
         }
     }
 }

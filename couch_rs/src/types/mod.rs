@@ -5,5 +5,6 @@ pub mod document;
 pub mod find;
 pub mod index;
 pub mod query;
+pub mod revision;
 pub mod system;
 pub mod view;
