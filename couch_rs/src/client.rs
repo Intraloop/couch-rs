@@ -4,13 +4,15 @@ use crate::{
     management::{ClusterSetup, ClusterSetupGetResponse, EnsureDbsExist, Membership},
     types::system::{CouchResponse, CouchStatus, DbInfo},
 };
+use arc_swap::ArcSwap;
 use base64::engine::general_purpose;
+use http::header::AUTHORIZATION;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{
     Method, RequestBuilder, StatusCode, Url,
     header::{self, CONTENT_TYPE, HeaderMap, HeaderValue, REFERER, USER_AGENT},
 };
-use std::{collections::HashMap, io::Write, time::Duration};
+use std::{collections::HashMap, io::Write, sync::Arc, time::Duration};
 
 fn construct_json_headers(uri: Option<&str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -47,6 +49,7 @@ pub(crate) async fn is_ok(request: RequestBuilder) -> bool {
     }
 }
 
+pub type TokenCell = Arc<ArcSwap<HeaderValue>>;
 /// Client handles the URI manipulation logic and the HTTP calls to the `CouchDB` REST API.
 /// It is also responsible for the creation/access/destruction of databases.
 #[derive(Debug, Clone)]
@@ -57,6 +60,7 @@ pub struct Client {
     _timeout: Option<u64>,
     uri: Url,
     pub db_prefix: String,
+    auth: Option<TokenCell>,
 }
 
 const TEST_DB_HOST: &str = "http://localhost:5984";
@@ -103,35 +107,27 @@ impl Client {
 
     /// `new_with_bearer_token` creates a new Couch client with JWT/Bearer token authentication.
     /// The URI has to be in this format: <http://hostname:5984>, for example: <http://192.168.64.5:5984>
-    /// The bearer token should be a valid JWT token that CouchDB will accept.
-    ///
-    /// # Panics
-    /// Panics when the AUTHORIZATION header can not be set on the request.
+    /// The `token` is a swappable cell holding the complete `AUTHORIZATION` header value (including the
+    /// `Bearer ` prefix), e.g. `Bearer <jwt>`. Its current value is read fresh on every request, so
+    /// swapping the cell rotates the credential without rebuilding the client.
     ///
     /// # Errors
     /// Returns a `CouchError` if the URI is invalid.
-    pub fn new_with_bearer_token(uri: &str, token: &str) -> CouchResult<Client> {
+    pub fn new_with_bearer_token(uri: &str, token: TokenCell) -> CouchResult<Client> {
         Client::new_with_bearer_token_and_timeout(uri, token, Some(DEFAULT_TIME_OUT))
     }
 
     /// `new_with_bearer_token_and_timeout` creates a new Couch client with JWT/Bearer token authentication and custom timeout.
     /// The URI has to be in this format: <http://hostname:5984>, for example: <http://192.168.64.5:5984>
-    /// The bearer token should be a valid JWT token that CouchDB will accept.
+    /// The `token` is a swappable cell holding the complete `AUTHORIZATION` header value (including the
+    /// `Bearer ` prefix), e.g. `Bearer <jwt>`. Its current value is read fresh on every request, so
+    /// swapping the cell rotates the credential without rebuilding the client.
     /// Timeout is in seconds.
-    ///
-    /// # Panics
-    /// Panics when the AUTHORIZATION header can not be set on the request.
     ///
     /// # Errors
     /// Returns a `CouchError` if the URI is invalid.
-    pub fn new_with_bearer_token_and_timeout(uri: &str, token: &str, timeout: Option<u64>) -> CouchResult<Client> {
-        let mut headers = HeaderMap::new();
-
-        let bearer_value = format!("Bearer {token}");
-        let auth_header = HeaderValue::from_str(&bearer_value).expect("can not set AUTHORIZATION header");
-        headers.insert(header::AUTHORIZATION, auth_header);
-
-        let mut client_builder = reqwest::Client::builder().default_headers(headers).gzip(true);
+    pub fn new_with_bearer_token_and_timeout(uri: &str, token: TokenCell, timeout: Option<u64>) -> CouchResult<Client> {
+        let mut client_builder = reqwest::Client::builder().gzip(true);
         if let Some(t) = timeout {
             client_builder = client_builder.timeout(Duration::new(t, 0));
         }
@@ -143,6 +139,7 @@ impl Client {
             _gzip: true,
             _timeout: timeout,
             db_prefix: String::new(),
+            auth: Some(token),
         })
     }
 
@@ -190,6 +187,7 @@ impl Client {
             _gzip: true,
             _timeout: timeout,
             db_prefix: String::new(),
+            auth: None,
         })
     }
 
@@ -406,9 +404,16 @@ impl Client {
             }
         }
 
-        self.client
+        let builder = self
+            .client
             .request(method, uri.as_str())
-            .headers(construct_json_headers(Some(uri.as_str())))
+            .headers(construct_json_headers(Some(uri.as_str())));
+
+        match &self.auth {
+            Some(auth) => builder.header(AUTHORIZATION, auth.load().clone().as_ref()),
+
+            None => builder,
+        }
     }
 
     pub(crate) fn get(&self, path: &str, args: Option<&HashMap<String, String>>) -> RequestBuilder {

@@ -105,13 +105,19 @@
 //! The library supports JWT/Bearer token authentication for CouchDB instances configured with JWT auth:
 //!
 //! ```no_run
+//! use arc_swap::ArcSwap;
 //! use couch_rs::Client;
+//! use http::HeaderValue;
 //! use std::error::Error;
+//! use std::sync::Arc;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn Error>> {
-//!     let jwt_token = "your_jwt_token_here";
-//!     let client = Client::new_with_bearer_token("http://localhost:5984", jwt_token)?;
+//!     // The token cell holds the full `Bearer <jwt>` header value. Swap it later
+//!     // (`token.store(...)`) to rotate the credential without rebuilding the client.
+//!     let header = HeaderValue::from_str("Bearer your_jwt_token_here")?;
+//!     let token = Arc::new(ArcSwap::from_pointee(header));
+//!     let client = Client::new_with_bearer_token("http://localhost:5984", token)?;
 //!     let db = client.db("my_database").await?;
 //!     Ok(())
 //! }
