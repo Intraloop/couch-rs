@@ -229,7 +229,7 @@ pub mod types;
 
 mod changes;
 
-pub use client::Client;
+pub use client::{Client, TokenCell};
 pub use types::revision::Revisions;
 
 #[allow(unused_mut, unused_variables)]
