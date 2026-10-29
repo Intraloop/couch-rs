@@ -63,16 +63,6 @@ impl Database {
         &self.name
     }
 
-    /// Borrows the [`Client`] this database issues its requests through.
-    ///
-    /// Lets callers build requests this type doesn't wrap (for example via
-    /// [`Client::req`]) against the same authenticated client, without having to
-    /// construct a second one.
-    #[must_use]
-    pub fn client(&self) -> &Client {
-        &self.client
-    }
-
     fn create_raw_path(&self, id: &str) -> String {
         format!("{}/{}", self.name, id)
     }
