@@ -12,7 +12,7 @@ use reqwest::{
     Method, RequestBuilder, StatusCode, Url,
     header::{self, CONTENT_TYPE, HeaderMap, HeaderValue, REFERER, USER_AGENT},
 };
-use std::{collections::HashMap, io::Write, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt, io::Write, sync::Arc, time::Duration};
 
 fn construct_json_headers(uri: Option<&str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -50,6 +50,16 @@ pub(crate) async fn is_ok(request: RequestBuilder) -> bool {
 }
 
 pub type TokenCell = Arc<ArcSwap<HeaderValue>>;
+
+#[derive(Clone)]
+struct TokenCellDebug(TokenCell);
+
+impl fmt::Debug for TokenCellDebug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("TokenCell").field(&"<REDACTED>").finish()
+    }
+}
+
 /// Client handles the URI manipulation logic and the HTTP calls to the `CouchDB` REST API.
 /// It is also responsible for the creation/access/destruction of databases.
 #[derive(Debug, Clone)]
@@ -60,7 +70,7 @@ pub struct Client {
     _timeout: Option<u64>,
     uri: Url,
     pub db_prefix: String,
-    auth: Option<TokenCell>,
+    auth: Option<TokenCellDebug>,
 }
 
 const TEST_DB_HOST: &str = "http://localhost:5984";
@@ -139,7 +149,7 @@ impl Client {
             _gzip: true,
             _timeout: timeout,
             db_prefix: String::new(),
-            auth: Some(token),
+            auth: Some(TokenCellDebug(token)),
         })
     }
 
@@ -410,7 +420,7 @@ impl Client {
             .headers(construct_json_headers(Some(uri.as_str())));
 
         match &self.auth {
-            Some(auth) => builder.header(AUTHORIZATION, auth.load().clone().as_ref()),
+            Some(auth) => builder.header(AUTHORIZATION, auth.0.load().clone().as_ref()),
 
             None => builder,
         }
