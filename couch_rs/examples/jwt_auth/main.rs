@@ -10,8 +10,11 @@
 /// 3. Setting the required claims (e.g., `sub` for username)
 ///
 /// For more info, see: https://docs.couchdb.org/en/stable/api/server/authn.html#jwt-authentication
-use serde_json::{Value, json};
+use arc_swap::ArcSwap;
+use http::HeaderValue;
+use serde_json::json;
 use std::error::Error;
+use std::sync::Arc;
 
 const DB_HOST: &str = "http://localhost:5984";
 const TEST_DB: &str = "test_jwt_db";
@@ -24,8 +27,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let jwt_token = std::env::var("COUCHDB_JWT_TOKEN")
         .expect("COUCHDB_JWT_TOKEN environment variable must be set");
 
+    // Build a swappable token cell holding the full `Bearer <jwt>` header value.
+    // Later, call `token.store(Arc::new(new_header))` to rotate the credential
+    // without rebuilding the client.
+    let header = HeaderValue::from_str(&format!("Bearer {jwt_token}"))?;
+    let token = Arc::new(ArcSwap::from_pointee(header));
+
     // Create client with JWT bearer token authentication
-    let client = couch_rs::Client::new_with_bearer_token(DB_HOST, &jwt_token)?;
+    let client = couch_rs::Client::new_with_bearer_token(DB_HOST, token)?;
 
     // Verify connection by checking CouchDB status
     match client.check_status().await {
@@ -52,12 +61,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\n✓ Database '{TEST_DB}' ready");
 
     // Insert a test document
-    let test_doc = json!({
+    let mut test_doc = json!({
         "message": "Hello from JWT-authenticated client!",
         "type": "test_document"
     });
 
-    match db.create(&test_doc).await {
+    match db.create(&mut test_doc).await {
         Ok(response) => {
             println!("\n✓ Document created:");
             println!("  ID: {}", response.id);

@@ -1414,4 +1414,5 @@ mod tests {
         let x = response.couch_json::<Baz>().await;
         assert_json_error(x, "error decoding response body");
     }
+
 }

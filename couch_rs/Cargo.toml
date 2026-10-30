@@ -30,6 +30,7 @@ futures-util = "0.3.31"
 futures-core = "0.3.31"
 percent-encoding = "2.3.2"
 http = "1.4.0"
+arc-swap = "1.9.2"
 
 [dependencies.reqwest]
 version = "0.13.1"
