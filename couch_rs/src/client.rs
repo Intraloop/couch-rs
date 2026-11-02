@@ -66,8 +66,6 @@ impl fmt::Debug for TokenCellDebug {
 #[allow(clippy::struct_field_names)]
 pub struct Client {
     client: reqwest::Client,
-    _gzip: bool,
-    _timeout: Option<u64>,
     uri: Url,
     pub db_prefix: String,
     auth: Option<TokenCellDebug>,
@@ -141,15 +139,44 @@ impl Client {
         if let Some(t) = timeout {
             client_builder = client_builder.timeout(Duration::new(t, 0));
         }
-        let client = client_builder.build()?;
+        Client::new_with_http_client(uri, client_builder.build()?, Some(token))
+    }
 
+    /// `new_with_http_client` creates a new Couch client on top of a `reqwest::Client` you configured.
+    /// The URI has to be in this format: <http://hostname:5984>, for example: <http://192.168.64.5:5984>
+    ///
+    /// Use this to choose timeouts, keepalive, TLS or proxy settings yourself. The other constructors set a
+    /// *total* request timeout, which also cuts off long-lived requests such as an infinite changes feed
+    /// (`CouchDB` holds those open for up to 60 seconds). For those, prefer `connect_timeout` and
+    /// `read_timeout`, which bound how long a stalled connection waits without limiting the whole response:
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// # fn main() -> couch_rs::error::CouchResult<()> {
+    /// let http = reqwest::Client::builder()
+    ///     .gzip(true)
+    ///     .connect_timeout(Duration::from_secs(5))
+    ///     .read_timeout(Duration::from_secs(90))
+    ///     .tcp_keepalive(Duration::from_secs(30))
+    ///     .build()?;
+    /// let client = couch_rs::Client::new_with_http_client("http://localhost:5984", http, None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// `auth`, when given, holds the complete `AUTHORIZATION` header value (for example `Bearer <jwt>` or
+    /// `Basic <base64>`). It is read fresh on every request, so swapping the cell rotates the credential
+    /// without rebuilding the client. `CouchDB` responses are only compressed if `http` was built with
+    /// `gzip(true)`.
+    ///
+    /// # Errors
+    /// Returns a `CouchError` if the URI is invalid.
+    pub fn new_with_http_client(uri: &str, http: reqwest::Client, auth: Option<TokenCell>) -> CouchResult<Client> {
         Ok(Client {
-            client,
+            client: http,
             uri: parse_server(uri)?,
-            _gzip: true,
-            _timeout: timeout,
             db_prefix: String::new(),
-            auth: Some(TokenCellDebug(token)),
+            auth: auth.map(TokenCellDebug),
         })
     }
 
@@ -194,8 +221,6 @@ impl Client {
         Ok(Client {
             client,
             uri: parse_server(uri)?,
-            _gzip: true,
-            _timeout: timeout,
             db_prefix: String::new(),
             auth: None,
         })
@@ -444,5 +469,51 @@ impl Client {
 
     pub(crate) fn delete(&self, path: &str, args: Option<&HashMap<String, String>>) -> RequestBuilder {
         self.req(Method::DELETE, path, args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bearer(token: &str) -> TokenCell {
+        Arc::new(ArcSwap::from_pointee(
+            HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+        ))
+    }
+
+    fn auth_header(client: &Client) -> Option<HeaderValue> {
+        let request = client.req(Method::GET, "/_up", None).build().unwrap();
+        request.headers().get(AUTHORIZATION).cloned()
+    }
+
+    #[test]
+    fn http_client_sends_current_token_on_each_request() {
+        let token = bearer("first");
+        let client =
+            Client::new_with_http_client("http://localhost:5984", reqwest::Client::new(), Some(token.clone())).unwrap();
+        assert_eq!(auth_header(&client).unwrap(), "Bearer first");
+
+        token.store(Arc::new(HeaderValue::from_static("Bearer second")));
+        assert_eq!(auth_header(&client).unwrap(), "Bearer second");
+    }
+
+    #[test]
+    fn http_client_without_auth_sends_no_authorization_header() {
+        let client = Client::new_with_http_client("http://localhost:5984", reqwest::Client::new(), None).unwrap();
+        assert!(auth_header(&client).is_none());
+    }
+
+    #[test]
+    fn http_client_rejects_invalid_uri() {
+        assert!(Client::new_with_http_client("not a uri", reqwest::Client::new(), None).is_err());
+    }
+
+    #[test]
+    fn debug_redacts_token() {
+        let client =
+            Client::new_with_http_client("http://localhost:5984", reqwest::Client::new(), Some(bearer("secret")))
+                .unwrap();
+        assert!(!format!("{client:?}").contains("secret"));
     }
 }

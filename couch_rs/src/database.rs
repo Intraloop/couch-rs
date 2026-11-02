@@ -1393,7 +1393,8 @@ mod tests {
         } else {
             panic!("unexpected error type");
         };
-        assert_eq!(expected, msg);
+        // Prefix match: reqwest appends details such as the URL, and that wording varies between patch releases.
+        assert!(msg.starts_with(expected), "expected message starting with {expected:?}, got {msg:?}");
     }
 
     #[derive(serde::Deserialize)]
