@@ -38,7 +38,7 @@ features = ["json", "gzip", "stream", "query"]
 default-features = false
 
 [dev-dependencies]
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 
 [features]
 default = ["derive", "rustls-tls"]
